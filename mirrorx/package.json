@@ -3,6 +3,7 @@
 	"version": "0.0.1",
 	"private": true,
 	"scripts": {
+		"prebuild": "yarn install",
 		"dev": "typesafe-i18n --no-watch && vite dev",
 		"build": "typesafe-i18n --no-watch && vite build",
 		"preview": "vite preview",
