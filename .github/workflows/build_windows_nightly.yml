@@ -68,14 +68,10 @@ jobs:
       - name: Zip
         run: |
           7z a MirrorX_x64.zip ${{github.workspace}}\\target\\release\\MirrorX.exe
-          7z a MirrorX_x64_en-US.zip ${{github.workspace}}\\target\\release\\bundle\\msi\\MirrorX_0.1.3_x64_en-US.msi
-          7z a MirrorX_x64_zh-CN.zip ${{github.workspace}}\\target\\release\\bundle\\msi\\MirrorX_0.1.3_x64_zh-CN.msi
-          7z a MirrorX_x64_zh-TW.zip ${{github.workspace}}\\target\\release\\bundle\\msi\\MirrorX_0.1.3_x64_zh-TW.msi
-          7z a MirrorX_x64_ko-KR.zip ${{github.workspace}}\\target\\release\\bundle\\msi\\MirrorX_0.1.3_x64_ko-KR.msi
       - name: Publish Release
         uses: ncipollo/release-action@v1
         with:
           prerelease: true
-          artifacts: "MirrorX_x64.zip,MirrorX_0.1.3_x64_*.zip"
+          artifacts: "MirrorX_x64.zip,D:\\a\\MirrorX\\MirrorX\\target\\release\\bundle\\msi\\*.msi"
           tag: ${{ env.TAG_NAME }}
           allowUpdates: true
