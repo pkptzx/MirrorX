@@ -76,7 +76,6 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           prerelease: true
-          removeArtifacts: true
           artifacts: "MirrorX_x64.zip","MirrorX_0.1.3_x64_*.zip"
           tag: ${{ env.TAG_NAME }}
           allowUpdates: true
