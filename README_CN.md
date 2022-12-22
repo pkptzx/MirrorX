@@ -47,7 +47,7 @@ MirrorX 是一个使用 [Rust](https://github.com/rust-lang/rust) 构建的远�
 ## 可用平台
 
 - [x] macOS
-- [x] Windows
+- [x] Windows [vc-runtime](https://learn.microsoft.com/zh-CN/cpp/windows/latest-supported-vc-redist?view=msvc-170)
 - [ ] Linux (WIP)
 - [ ] Android (WIP)
 - [ ] iOS (WIP)
