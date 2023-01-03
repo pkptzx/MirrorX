@@ -8,7 +8,8 @@ use super::{
 };
 use crate::{
     api::endpoint::handlers::{
-        input::handle_input, negotiate_finished::handle_negotiate_finished_request,
+        directory::handle_directory_request, input::handle_input,
+        negotiate_finished::handle_negotiate_finished_request,
     },
     component::desktop::monitor::Monitor,
     core_error,
@@ -29,16 +30,17 @@ const RECV_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct EndPointClient {
     endpoint_id: EndPointID,
     monitor: Arc<RwLock<Option<Arc<Monitor>>>>,
-    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    tx: Sender<Vec<u8>>,
 }
 
 impl EndPointClient {
-    pub async fn new_active(
+    pub async fn new_desktop_active(
         endpoint_id: EndPointID,
         stream_key: Option<(OpeningKey<NonceValue>, SealingKey<NonceValue>)>,
         stream: EndPointStream,
-        video_frame_tx: tokio::sync::mpsc::Sender<EndPointVideoFrame>,
-        audio_frame_tx: tokio::sync::mpsc::Sender<EndPointAudioFrame>,
+        video_frame_tx: Sender<EndPointVideoFrame>,
+        audio_frame_tx: Sender<EndPointAudioFrame>,
+        directory_tx: Sender<EndPointDirectoryResponse>,
         visit_credentials: Option<Vec<u8>>,
     ) -> CoreResult<Arc<EndPointClient>> {
         EndPointClient::create(
@@ -48,6 +50,27 @@ impl EndPointClient {
             stream,
             Some(video_frame_tx),
             Some(audio_frame_tx),
+            Some(directory_tx),
+            visit_credentials,
+        )
+        .await
+    }
+
+    pub async fn new_file_manager_active(
+        endpoint_id: EndPointID,
+        stream_key: Option<(OpeningKey<NonceValue>, SealingKey<NonceValue>)>,
+        stream: EndPointStream,
+        directory_tx: Sender<EndPointDirectoryResponse>,
+        visit_credentials: Option<Vec<u8>>,
+    ) -> CoreResult<Arc<EndPointClient>> {
+        EndPointClient::create(
+            true,
+            endpoint_id,
+            stream_key,
+            stream,
+            None,
+            None,
+            Some(directory_tx),
             visit_credentials,
         )
         .await
@@ -66,6 +89,7 @@ impl EndPointClient {
             stream,
             None,
             None,
+            None,
             visit_credentials,
         )
         .await?;
@@ -77,8 +101,9 @@ impl EndPointClient {
         endpoint_id: EndPointID,
         key_pair: Option<(OpeningKey<NonceValue>, SealingKey<NonceValue>)>,
         stream: EndPointStream,
-        video_frame_tx: Option<tokio::sync::mpsc::Sender<EndPointVideoFrame>>,
-        audio_frame_tx: Option<tokio::sync::mpsc::Sender<EndPointAudioFrame>>,
+        video_frame_tx: Option<Sender<EndPointVideoFrame>>,
+        audio_frame_tx: Option<Sender<EndPointAudioFrame>>,
+        directory_tx: Option<Sender<EndPointDirectoryResponse>>,
         visit_credentials: Option<Vec<u8>>,
     ) -> CoreResult<Arc<EndPointClient>> {
         let (opening_key, sealing_key) = match key_pair {
@@ -126,7 +151,7 @@ impl EndPointClient {
         };
 
         // active endpoint should start negotiate with passive endpoint
-        let primary_monitor = if active {
+        let primary_monitor = if active && video_frame_tx.is_some() && audio_frame_tx.is_some() {
             let params = serve_active_negotiate(&tx, &mut rx).await?;
             Some(Arc::new(params.primary_monitor))
         } else {
@@ -139,7 +164,13 @@ impl EndPointClient {
             tx,
         });
 
-        handle_message(client.clone(), rx, video_frame_tx, audio_frame_tx);
+        handle_message(
+            client.clone(),
+            rx,
+            video_frame_tx,
+            audio_frame_tx,
+            directory_tx,
+        );
 
         Ok(client)
     }
@@ -241,6 +272,7 @@ fn handle_message(
     mut rx: tokio::sync::mpsc::Receiver<Bytes>,
     video_frame_tx: Option<Sender<EndPointVideoFrame>>,
     audio_frame_tx: Option<Sender<EndPointAudioFrame>>,
+    directory_tx: Option<Sender<EndPointDirectoryResponse>>,
 ) {
     tokio::spawn(async move {
         loop {
@@ -296,6 +328,21 @@ fn handle_message(
                 }
                 EndPointMessage::InputCommand(input_event) => {
                     handle_input(client.clone(), input_event).await
+                }
+                EndPointMessage::DirectoryRequest(req) => {
+                    handle_directory_request(client.clone(), req).await
+                }
+                EndPointMessage::DirectoryResponse(resp) => {
+                    if let Some(ref tx) = directory_tx {
+                        if let Err(err) = tx.send(resp).await {
+                            tracing::error!(%err, "endpoint directory message channel send failed");
+                            return;
+                        }
+                    } else {
+                        tracing::error!(
+                            "as passive endpoint, shouldn't receive directory response"
+                        );
+                    }
                 }
             }
         }

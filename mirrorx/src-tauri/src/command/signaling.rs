@@ -2,7 +2,10 @@ use super::AppState;
 use crate::window::create_desktop_window;
 use mirrorx_core::{
     api::{
-        endpoint::id::EndPointID,
+        endpoint::{
+            create_desktop_active_endpoint_client, create_file_manager_active_endpoint_client,
+            id::EndPointID, EndPointStream,
+        },
         signaling::{http_message::Response, SignalingClient},
     },
     core_error,
@@ -89,15 +92,26 @@ pub async fn signaling_connect(
 }
 
 #[tauri::command]
-#[tracing::instrument(skip(app_state, egui_plugin))]
+#[tracing::instrument(skip(app_handle, app_state, egui_plugin, password))]
 pub async fn signaling_visit(
+    app_handle: tauri::AppHandle,
     app_state: tauri::State<'_, AppState>,
     egui_plugin: tauri::State<'_, EguiPluginHandle>,
     remote_device_id: String,
     password: String,
+    visit_desktop: bool,
 ) -> CoreResult<()> {
-    let window_label = format!("MirrorX {}", remote_device_id);
-    let remote_device_id: i64 = remote_device_id.replace('-', "").parse()?;
+    let window_label = if visit_desktop {
+        format!("Desktop:{}", remote_device_id)
+    } else {
+        format!("FileManager:{}", remote_device_id)
+    };
+
+    let window_title = if visit_desktop {
+        format!("MirrorX {}", remote_device_id)
+    } else {
+        format!("MirrorX File Manager {}", remote_device_id)
+    };
 
     let Some(ref storage) = *app_state.storage.lock().await else {
         return Err(core_error!("storage not initialize"));
@@ -107,10 +121,16 @@ pub async fn signaling_visit(
         return Err(core_error!("storage not initialize"));
     };
 
+    let remote_device_id_num = remote_device_id.replace('-', "").parse()?;
     let primary_domain = storage.domain().get_primary_domain()?;
     let local_device_id = primary_domain.device_id;
     let resp = signaling_client
-        .visit(primary_domain.device_id, remote_device_id, password)
+        .visit(
+            primary_domain.device_id,
+            remote_device_id_num,
+            password,
+            visit_desktop,
+        )
         .await?;
 
     let (endpoint_addr, visit_credentials, opening_key, sealing_key) = match resp {
@@ -127,38 +147,79 @@ pub async fn signaling_visit(
 
     tracing::info!(?local_device_id, ?remote_device_id, "key exchange success");
 
-    if let Err(err) = egui_plugin.create_window(
-        window_label.clone(),
-        Box::new(move |cc| {
-            if let Some(gl_context) = cc.gl.as_ref() {
-                Box::new(create_desktop_window(
-                    cc,
-                    gl_context.clone(),
-                    EndPointID::DeviceID {
-                        local_device_id,
-                        remote_device_id,
-                    },
-                    Some((opening_key, sealing_key)),
-                    Some(visit_credentials),
-                    endpoint_addr,
-                ))
-            } else {
-                panic!("get gl context failed");
-            }
-        }),
-        window_label,
-        tauri_egui::eframe::NativeOptions {
-            // hardware_acceleration: HardwareAcceleration::Required,
-            ..Default::default()
-        },
-    ) {
-        tracing::error!(?err, "create desktop window failed");
-        return Err(core_error!("create remote desktop window failed"));
+    let endpoint_id = EndPointID::DeviceID {
+        local_device_id,
+        remote_device_id: remote_device_id_num,
+    };
+
+    if visit_desktop {
+        let (client, render_frame_rx, directory_rx) = create_desktop_active_endpoint_client(
+            endpoint_id,
+            Some((opening_key, sealing_key)),
+            EndPointStream::ActiveTCP(endpoint_addr),
+            Some(visit_credentials),
+        )
+        .await?;
+
+        if let Err(err) = egui_plugin.create_window(
+            window_label,
+            Box::new(move |cc| {
+                if let Some(gl_context) = cc.gl.as_ref() {
+                    Box::new(create_desktop_window(
+                        cc,
+                        gl_context.clone(),
+                        endpoint_id,
+                        client,
+                        render_frame_rx,
+                        directory_rx,
+                    ))
+                } else {
+                    panic!("get gl context failed");
+                }
+            }),
+            window_title,
+            tauri_egui::eframe::NativeOptions {
+                // hardware_acceleration: HardwareAcceleration::Required,
+                ..Default::default()
+            },
+        ) {
+            tracing::error!(?err, "create desktop window failed");
+            return Err(core_error!("create remote desktop window failed"));
+        }
+    } else {
+        let (client, directory_rx) = create_file_manager_active_endpoint_client(
+            endpoint_id,
+            Some((opening_key, sealing_key)),
+            EndPointStream::ActiveTCP(endpoint_addr),
+            Some(visit_credentials),
+        )
+        .await?;
+
+        app_state
+            .files_endpoints
+            .insert(remote_device_id.to_owned(), (client, directory_rx));
+
+        if let Err(err) = tauri::WindowBuilder::new(
+            &app_handle,
+            window_label,
+            tauri::WindowUrl::App(
+                format!("/files?device_id={}", remote_device_id.to_owned()).into(),
+            ),
+        )
+        .center()
+        .min_inner_size(640., 480.)
+        .title(window_title)
+        .build()
+        {
+            app_state.files_endpoints.remove(&remote_device_id);
+            tracing::error!(?err, "create file manager window failed");
+            return Err(core_error!("create remote file manager window failed"));
+        }
     }
 
     let _ = storage
         .history()
-        .create(remote_device_id, &primary_domain.name);
+        .create(remote_device_id_num, &primary_domain.name);
 
     Ok(())
 }

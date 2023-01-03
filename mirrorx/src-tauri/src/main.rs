@@ -117,7 +117,7 @@ fn build_app() -> App {
                 let builder = tauri::WindowBuilder::new(
                     &handle,
                     "main",
-                    tauri::WindowUrl::App("/home".into()),
+                    tauri::WindowUrl::App("/main/home".into()),
                 )
                 .center()
                 .always_on_top(true)
@@ -182,6 +182,7 @@ fn build_app() -> App {
             command::lan::lan_discoverable_set,
             command::signaling::signaling_connect,
             command::signaling::signaling_visit,
+            command::file_manager::file_manager_visit,
             command::utility::utility_generate_random_password,
             command::utility::utility_detect_os_platform,
             command::utility::utility_enum_graphics_cards,
